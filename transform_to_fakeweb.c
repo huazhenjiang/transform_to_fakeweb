@@ -129,13 +129,20 @@ static void _split_whole_name(const char *whole_name, char *fname, char *ext)
 #endif
 
 typedef struct _fname_arrayname_element_ {
+	char path[256];
 	char filename[128];
 	char arrayname[128];
-	unsigned long size_t;//char size[16];
-	//char ptrname[128];
+	unsigned long size_t;
 }fname_arrayname_element;
 
 unsigned int file_count=0;
+
+//unsigned int count=0;
+unsigned int gfFirst_Access=0;
+unsigned int gfVisitDone=0;
+char First_DIR[256];
+unsigned int pEntry_index=0;
+
 fname_arrayname_element *mapping_table;
 char input_file_pwd[128]={0};
 
@@ -173,6 +180,136 @@ void test_struct_init(){
 #endif
 
 #ifdef _LINUX_
+
+void VisitDirItem(const char* szDir, struct dirent* pEntry, int get_type)
+{
+	
+	// Ignore . and ..	
+	if (strcmp(pEntry->d_name, ".") != 0 && strcmp(pEntry->d_name, "..") != 0)
+	{
+		char szPath[1024] = {};
+		int nLen = snprintf(szPath, sizeof(szPath)-1, "%s/%s", szDir, pEntry->d_name);
+		szPath[nLen] = '\0';
+
+		char *head;
+		char temp_path[256];
+		char local_path[256];
+		// Query file status
+		struct stat st = {};
+		lstat(szPath, &st);
+		if (S_ISDIR(st.st_mode))
+		{
+			VisitDir(szPath,get_type);
+		}
+		else if (S_ISREG(st.st_mode))
+		{
+			//printf("\r\nScanning %s...", pEntry->d_name);
+			if(get_type == 0){
+				file_count=file_count+1;
+			}
+			
+			else if(get_type == 1){
+				memset(temp_path,0,sizeof(temp_path));
+				memset(local_path,0,sizeof(local_path));
+				
+				getcwd(temp_path, sizeof(temp_path));		//save original work directory to temp
+
+				chdir(szDir);								//enter input file folder
+				getcwd(local_path, sizeof(local_path));		//get absolute path of input file folder
+				chdir(temp_path);							//back to original work directory
+				//printf("\r\ntemp_path: %s", temp_path );
+				//printf("\r\nlocal_path: %s", local_path );
+
+				strncpy(mapping_table[pEntry_index].path, local_path, strlen(local_path)); //save path
+ 
+				strncpy(mapping_table[pEntry_index].filename, pEntry->d_name, strlen(pEntry->d_name)); 
+
+				head=str_replace(pEntry->d_name,".","_");
+				head=str_replace(head,"-","_");
+				strncpy(mapping_table[pEntry_index].arrayname, head , strlen(head));
+				pEntry_index = pEntry_index+1;
+			}
+			
+		}
+	}
+
+}
+
+int VisitDir(const char* szDir,int get_type)
+{
+	// Open folder
+	
+	if(gfFirst_Access){
+		memset(First_DIR,0,sizeof(First_DIR));
+		strcpy(First_DIR,szDir);
+		gfFirst_Access=0;
+	}
+	//printf("\r\n open %s",szDir);
+	DIR* pDir = opendir(szDir);
+	if (pDir != NULL)
+	{	
+		// Read items inside the folder
+		struct dirent* pEntry = NULL;
+		while ((pEntry = readdir(pDir)) != NULL)
+		{
+			VisitDirItem(szDir, pEntry,get_type);
+		}
+	}
+	else{
+		printf("Open Directory %s\n",
+						szDir); 
+		return -1; 		
+	}
+	// Close folder
+	closedir(pDir);
+	if(strcmp(First_DIR,szDir)==0){
+		gfVisitDone =1 ;
+		gfFirst_Access =0;
+		seekdir(pDir,0);
+		printf("\r\nVisit Done.Regular files: %d",file_count);
+	}
+	return 0;
+}
+
+int lookfor_regular_files(char *folder_path){
+
+	int i=0;
+
+	gfFirst_Access =1 ;
+	gfVisitDone = 0;
+
+
+	if(VisitDir(folder_path,0) != 0){
+		printf("\r\nCan not open %s\n",folder_path);
+		return -1;
+	}
+
+	mapping_table = (fname_arrayname_element *)malloc( file_count * sizeof(fname_arrayname_element));
+	if( mapping_table == NULL ) {
+		printf("Error: unable to allocate required memory\n");
+		return -1;
+	}	
+ 
+ 	memset(mapping_table, 0, file_count * sizeof(fname_arrayname_element));  //init struct '\0'
+
+	gfFirst_Access =1 ;
+	gfVisitDone = 0;	
+	if(VisitDir(folder_path,1) !=0){
+		printf("\r\nCan not open %s\n",folder_path);
+		return -1;
+	}
+
+	for(i=0;i<pEntry_index;i++){
+		printf("\r\n%d: %s, %s",i,mapping_table[i].filename, mapping_table[i].arrayname);
+	}	  
+	printf("\r\n [mapping_table[i].path]");
+	for(i=0;i<pEntry_index;i++){
+		printf("\r\n%d: %s",i,mapping_table[i].path);
+	}
+
+	return 0;
+}
+
 int getallfiles_linux(char *folder_path){
 
     DIR *dirp;  
@@ -181,7 +318,7 @@ int getallfiles_linux(char *folder_path){
 	int i, index;
 
 	index=0;
-
+	//printf("\r\n linux_open %s",folder_path);
     if ((dirp = opendir(folder_path)) == NULL) {  
         printf("Open Directory %s\n",
                 folder_path);  
@@ -204,6 +341,9 @@ int getallfiles_linux(char *folder_path){
 	seekdir(dirp,0);
 
     while ((direntp = readdir(dirp)) != NULL){
+		//if(direntp->d_type == DT_DIR){
+		//	printf("\r\n[this is dir] : %s",direntp->d_name);
+		//}
 		if( (strcmp(direntp->d_name, ".") !=0 ) && (strcmp(direntp->d_name, "..") !=0 ) ){
 				strncpy(mapping_table[index].filename, direntp->d_name, strlen(direntp->d_name)); 
 
@@ -327,7 +467,7 @@ int getallfiles(char *folder_path){
 		printf("\r\n%d: %s, %s",i,mapping_table[i].filename, mapping_table[i].arrayname);
 	}
 
-	//free(mapping_table); 
+	 
 	return 0;	
 }
 #endif
@@ -363,11 +503,15 @@ int main (int argc, char *argv[]){
 	}
 
 #ifdef _LINUX_
-	if(getallfiles_linux(argv[1]) !=0){
-		printf("\r\nCan not open files.");
-		return -1;			
-	};
-	
+	//if(getallfiles_linux(argv[1]) !=0){
+	//	printf("\r\nCan not open files.");
+	//	return -1;			
+	//};
+
+	if(lookfor_regular_files(argv[1]) !=0){
+		printf("\r\nCan not open files.\n");
+		return -1;
+	}
 	
 	chdir( &(pwd_path[0]) );	
 	//printf("\r\n1.Current working directory: %s\n", getcwd(NULL, NULL));
@@ -401,7 +545,7 @@ int main (int argc, char *argv[]){
 		ch_length =0;
 		
 		memset(input_file_full_path,0,sizeof(input_file_full_path));
-		strcpy(input_file_full_path, input_file_pwd);
+		strcpy(input_file_full_path, mapping_table[i].path);
 		strcat(input_file_full_path, "/");
 		strcat(input_file_full_path, mapping_table[i].filename);
 		printf("\r\n%d: %s",i,input_file_full_path);	
@@ -586,6 +730,7 @@ int main (int argc, char *argv[]){
 	fclose(fp_stringweb_h);		
 #endif //WINDOS
 
+	free(mapping_table);
 
 #ifdef _test_struct_init_	
 	//test_struct_init();
